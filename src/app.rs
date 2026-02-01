@@ -398,8 +398,9 @@ pub struct App
     pub download_dialog: Option<DownloadDialog>,
     pub last_download_dir: String,
 
-    // Status message
+    // Status message (with auto-expire)
     pub status_message: Option<String>,
+    pub status_expires: Option<std::time::Instant>,
 
     // Spinner state
     pub spinner_frame: usize,
@@ -438,6 +439,7 @@ impl App
             download_dialog: None,
             last_download_dir: default_dir,
             status_message: None,
+            status_expires: None,
             spinner_frame: 0,
             snapshot_visible_height: 20,
             file_visible_height: 20,
@@ -445,10 +447,20 @@ impl App
         }
     }
 
-    /// Advance spinner animation
+    /// Advance spinner animation and check status expiration
     pub fn tick_spinner(&mut self)
     {
         self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
+
+        // Clear expired status message
+        if let Some(expires) = self.status_expires
+        {
+            if std::time::Instant::now() >= expires
+            {
+                self.status_message = None;
+                self.status_expires = None;
+            }
+        }
     }
 
     /// Get current spinner character
@@ -621,10 +633,11 @@ impl App
                 self.state = AppState::Ready;
             }
 
-            // Confirm search, keep filter active
+            // Confirm search and navigate into selected folder
             KeyCode::Enter =>
             {
                 self.state = AppState::Ready;
+                return self.select_item();
             }
 
             // Navigate filtered list
@@ -1083,11 +1096,12 @@ impl App
         self.state = AppState::Error(message);
     }
 
-    /// Set status message
+    /// Set status message with auto-expire after 3 seconds
     pub fn set_status(&mut self,
                       message: String)
     {
         self.status_message = Some(message);
+        self.status_expires = Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
     }
 
 }
