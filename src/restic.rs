@@ -5,6 +5,40 @@ use tokio::process::Command;
 use crate::file::FileNode;
 use crate::snapshot::Snapshot;
 
+/// Result of a restic command, including the command string for logging
+pub struct CommandResult<T>
+{
+    pub command: String,
+    pub result: Result<T>,
+    pub error_output: Option<String>,
+}
+
+impl<T> CommandResult<T>
+{
+    pub fn success(command: String,
+                   value: T)
+                   -> Self
+    {
+        Self {
+            command,
+            result: Ok(value),
+            error_output: None,
+        }
+    }
+
+    pub fn failure(command: String,
+                   error: anyhow::Error,
+                   error_output: Option<String>)
+                   -> Self
+    {
+        Self {
+            command,
+            result: Err(error),
+            error_output,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ResticClient
 {
@@ -42,37 +76,61 @@ impl ResticClient
     }
 
     /// List all snapshots in the repository
-    pub async fn list_snapshots(&self) -> Result<Vec<Snapshot>>
+    pub async fn list_snapshots(&self) -> CommandResult<Vec<Snapshot>>
     {
+        let command_str = format!("restic --repo {} --json snapshots", self.repository);
+
         let mut cmd = self.base_command();
         cmd.arg("snapshots");
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let output = cmd.output().await.context("Failed to run restic snapshots")?;
+        let output = match cmd.output().await
+        {
+            Ok(o) => o,
+            Err(e) => return CommandResult::failure(
+                command_str,
+                anyhow::anyhow!("Failed to run restic snapshots: {}", e),
+                None,
+            ),
+        };
 
         if !output.status.success()
         {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("restic snapshots failed: {}", stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return CommandResult::failure(
+                command_str,
+                anyhow::anyhow!("restic snapshots failed: {}", stderr),
+                Some(stderr),
+            );
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut snapshots: Vec<Snapshot> =
-            serde_json::from_str(&stdout).context("Failed to parse snapshots JSON")?;
-
-        // Sort by date descending (most recent first)
-        snapshots.sort_by(|a, b| b.time.cmp(&a.time));
-
-        Ok(snapshots)
+        match serde_json::from_str::<Vec<Snapshot>>(&stdout)
+        {
+            Ok(mut snapshots) =>
+            {
+                // Sort by date descending (most recent first)
+                snapshots.sort_by(|a, b| b.time.cmp(&a.time));
+                CommandResult::success(command_str, snapshots)
+            }
+            Err(e) => CommandResult::failure(
+                command_str,
+                anyhow::anyhow!("Failed to parse snapshots JSON: {}", e),
+                None,
+            ),
+        }
     }
 
     /// List files in a snapshot at the given path
     pub async fn list_files(&self,
                             snapshot_id: &str,
                             path: &str)
-                            -> Result<Vec<FileNode>>
+                            -> CommandResult<Vec<FileNode>>
     {
+        let command_str = format!("restic --repo {} --json ls {} {}",
+                                  self.repository, snapshot_id, path);
+
         let mut cmd = self.base_command();
         cmd.arg("ls");
         cmd.arg(snapshot_id);
@@ -80,12 +138,24 @@ impl ResticClient
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let output = cmd.output().await.context("Failed to run restic ls")?;
+        let output = match cmd.output().await
+        {
+            Ok(o) => o,
+            Err(e) => return CommandResult::failure(
+                command_str,
+                anyhow::anyhow!("Failed to run restic ls: {}", e),
+                None,
+            ),
+        };
 
         if !output.status.success()
         {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("restic ls failed: {}", stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return CommandResult::failure(
+                command_str,
+                anyhow::anyhow!("restic ls failed: {}", stderr),
+                Some(stderr),
+            );
         }
 
         // restic ls --json outputs one JSON object per line (NDJSON)
@@ -129,7 +199,7 @@ impl ResticClient
                  }
              });
 
-        Ok(files)
+        CommandResult::success(command_str, files)
     }
 
     /// Restore a file or directory from a snapshot
@@ -137,8 +207,11 @@ impl ResticClient
                          snapshot_id: &str,
                          include_path: &str,
                          target: &str)
-                         -> Result<()>
+                         -> CommandResult<()>
     {
+        let command_str = format!("restic --repo {} restore {} --include {} --target {}",
+                                  self.repository, snapshot_id, include_path, target);
+
         let mut cmd = Command::new("restic");
         cmd.arg("--repo").arg(&self.repository);
         cmd.arg("restore");
@@ -148,15 +221,27 @@ impl ResticClient
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let output = cmd.output().await.context("Failed to run restic restore")?;
+        let output = match cmd.output().await
+        {
+            Ok(o) => o,
+            Err(e) => return CommandResult::failure(
+                command_str,
+                anyhow::anyhow!("Failed to run restic restore: {}", e),
+                None,
+            ),
+        };
 
         if !output.status.success()
         {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("restic restore failed: {}", stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return CommandResult::failure(
+                command_str,
+                anyhow::anyhow!("restic restore failed: {}", stderr),
+                Some(stderr),
+            );
         }
 
-        Ok(())
+        CommandResult::success(command_str, ())
     }
 }
 

@@ -16,16 +16,87 @@ use crate::event::Command;
 use crate::file::FileNode;
 use restic::ResticClient;
 
+/// CLI configuration
+struct CliConfig
+{
+    log_file: Option<String>,
+}
+
+fn parse_args() -> CliConfig
+{
+    let args: Vec<String> = std::env::args().collect();
+    let mut config = CliConfig { log_file: None };
+
+    let mut i = 1;
+    while i < args.len()
+    {
+        match args[i].as_str()
+        {
+            "--log-file" | "-l" =>
+            {
+                if i + 1 < args.len()
+                {
+                    config.log_file = Some(args[i + 1].clone());
+                    i += 2;
+                }
+                else
+                {
+                    eprintln!("Error: --log-file requires a path argument");
+                    std::process::exit(1);
+                }
+            }
+            "--help" | "-h" =>
+            {
+                println!("rest-snapview - Terminal UI for browsing restic snapshots");
+                println!();
+                println!("Usage: rest-snapview [OPTIONS]");
+                println!();
+                println!("Options:");
+                println!("  -l, --log-file <PATH>  Save command logs to file");
+                println!("  -h, --help             Show this help message");
+                println!();
+                println!("Environment variables:");
+                println!("  RESTIC_REPOSITORY      Repository location (required)");
+                println!("  RESTIC_PASSWORD        Repository password");
+                println!("  RESTIC_PASSWORD_FILE   Path to password file");
+                println!("  RESTIC_PASSWORD_COMMAND Command to get password");
+                std::process::exit(0);
+            }
+            arg =>
+            {
+                eprintln!("Error: Unknown argument: {}", arg);
+                eprintln!("Use --help for usage information");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    config
+}
+
 /// Results from background tasks
 enum TaskResult
 {
-    Files(Result<Vec<FileNode>, String>),
-    Download(Result<String, String>), // Ok(target path) or Err(error message)
+    Files
+    {
+        command: String,
+        result: Result<Vec<FileNode>, String>,
+        error_output: Option<String>,
+    },
+    Download
+    {
+        command: String,
+        result: Result<String, String>,  // Ok(target path) or Err(error message)
+        error_output: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()>
 {
+    // Parse CLI arguments
+    let config = parse_args();
+
     // Create restic client from environment
     let client = match ResticClient::from_env()
     {
@@ -52,9 +123,17 @@ async fn main() -> Result<()>
 
     // Create app
     let mut app = App::new();
+    app.log_file_path = config.log_file;
 
     // Load initial snapshots
-    match client.list_snapshots().await
+    let cmd_result = client.list_snapshots().await;
+    app.add_command_log(
+        cmd_result.command.clone(),
+        cmd_result.result.is_ok(),
+        cmd_result.error_output.clone(),
+    );
+
+    match cmd_result.result
     {
         Ok(snapshots) =>
         {
@@ -132,11 +211,12 @@ fn spawn_command(client: &ResticClient,
         {
             let client = client.clone();
             tokio::spawn(async move {
-                let result = client.list_files(&snapshot_id, &path).await;
-                let task_result = match result
-                {
-                    Ok(files) => TaskResult::Files(Ok(files)),
-                    Err(e) => TaskResult::Files(Err(format!("Failed to list files: {}", e))),
+                let cmd_result = client.list_files(&snapshot_id, &path).await;
+                let task_result = TaskResult::Files {
+                    command: cmd_result.command,
+                    result: cmd_result.result
+                        .map_err(|e| format!("Failed to list files: {}", e)),
+                    error_output: cmd_result.error_output,
                 };
                 let _ = tx.send(task_result).await;
             });
@@ -148,11 +228,12 @@ fn spawn_command(client: &ResticClient,
                 let client = client.clone();
                 let snapshot_id = snapshot_id.clone();
                 tokio::spawn(async move {
-                    let result = client.list_files(&snapshot_id, &path).await;
-                    let task_result = match result
-                    {
-                        Ok(files) => TaskResult::Files(Ok(files)),
-                        Err(e) => TaskResult::Files(Err(format!("Failed to list files: {}", e))),
+                    let cmd_result = client.list_files(&snapshot_id, &path).await;
+                    let task_result = TaskResult::Files {
+                        command: cmd_result.command,
+                        result: cmd_result.result
+                            .map_err(|e| format!("Failed to list files: {}", e)),
+                        error_output: cmd_result.error_output,
                     };
                     let _ = tx.send(task_result).await;
                 });
@@ -169,11 +250,13 @@ fn spawn_command(client: &ResticClient,
                 let snapshot_id = snapshot_id.clone();
                 let target_clone = target.clone();
                 tokio::spawn(async move {
-                    let result = client.restore(&snapshot_id, &path, &target_clone).await;
-                    let task_result = match result
-                    {
-                        Ok(()) => TaskResult::Download(Ok(target_clone)),
-                        Err(e) => TaskResult::Download(Err(format!("Download failed: {}", e))),
+                    let cmd_result = client.restore(&snapshot_id, &path, &target_clone).await;
+                    let task_result = TaskResult::Download {
+                        command: cmd_result.command,
+                        result: cmd_result.result
+                            .map(|_| target_clone)
+                            .map_err(|e| format!("Download failed: {}", e)),
+                        error_output: cmd_result.error_output,
                     };
                     let _ = tx.send(task_result).await;
                 });
@@ -192,22 +275,27 @@ fn handle_task_result(app: &mut App,
 {
     match result
     {
-        TaskResult::Files(Ok(files)) =>
+        TaskResult::Files { command, result, error_output } =>
         {
-            app.set_files(files);
+            app.add_command_log(command, result.is_ok(), error_output);
+            match result
+            {
+                Ok(files) => app.set_files(files),
+                Err(e) => app.set_error(e),
+            }
         }
-        TaskResult::Files(Err(e)) =>
+        TaskResult::Download { command, result, error_output } =>
         {
-            app.set_error(e);
-        }
-        TaskResult::Download(Ok(target)) =>
-        {
-            app.state = AppState::Ready;
-            app.set_status(format!("Downloaded to: {}", target));
-        }
-        TaskResult::Download(Err(e)) =>
-        {
-            app.set_error(e);
+            app.add_command_log(command, result.is_ok(), error_output);
+            match result
+            {
+                Ok(target) =>
+                {
+                    app.state = AppState::Ready;
+                    app.set_status(format!("Downloaded to: {}", target));
+                }
+                Err(e) => app.set_error(e),
+            }
         }
     }
 }

@@ -13,15 +13,17 @@ pub fn render(frame: &mut Frame,
               app: &mut App)
 {
     let chunks = Layout::vertical([
-        Constraint::Percentage(40), // Snapshots
-        Constraint::Min(5),         // Files
+        Constraint::Percentage(35), // Snapshots
+        Constraint::Percentage(45), // Files
+        Constraint::Percentage(20), // Command log
         Constraint::Length(1),      // Status bar
     ])
     .split(frame.area());
 
     render_snapshots(frame, app, chunks[0]);
     render_files(frame, app, chunks[1]);
-    render_status_bar(frame, app, chunks[2]);
+    render_command_log(frame, app, chunks[2]);
+    render_status_bar(frame, app, chunks[3]);
 
     // Render loading overlay if loading
     if matches!(app.state, AppState::Loading | AppState::Downloading(_))
@@ -269,6 +271,173 @@ fn render_files(frame: &mut Frame,
     frame.render_widget(list, list_area);
 }
 
+/// Render the command log panel
+fn render_command_log(frame: &mut Frame,
+                      app: &mut App,
+                      area: Rect)
+{
+    let focused = app.focused_panel == Panel::CommandLog;
+    let border_style = if focused
+    {
+        Style::default().fg(Color::Cyan)
+    }
+    else
+    {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    // Calculate visible height (area height minus borders)
+    let visible_height = area.height.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    // Save visible height for movement calculations
+    app.log_visible_height = visible_height;
+
+    let title = format!(" Command Log ({}) ", app.command_logs.len());
+    let block = Block::default().title(title)
+                                .borders(Borders::ALL)
+                                .border_style(border_style);
+
+    if app.command_logs.is_empty()
+    {
+        let paragraph = Paragraph::new("  No commands executed yet")
+            .block(block)
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
+    // Build wrapped text for each log entry, tracking line positions
+    let mut lines: Vec<Line> = Vec::new();
+    let mut entry_start_lines: Vec<usize> = Vec::new();  // Starting line index for each entry
+
+    for (i, entry) in app.command_logs.iter().enumerate()
+    {
+        entry_start_lines.push(lines.len());
+
+        let is_selected = i == app.log_cursor;
+        let prefix = if is_selected { ">" } else { " " };
+
+        // Format header: "> [HH:MM:SS] [OK/FAIL] "
+        let time_str = entry.timestamp.format("%H:%M:%S");
+        let status = if entry.success { "OK" } else { "FAIL" };
+        let status_color = if entry.success { Color::Green } else { Color::Red };
+
+        let header = format!("{} [{}] [{:4}] ", prefix, time_str, status);
+        let header_len = header.len();
+
+        // Calculate available width for command text
+        let cmd_width = inner_width.saturating_sub(header_len).max(1);
+
+        let style = if is_selected && focused
+        {
+            Style::default().add_modifier(Modifier::BOLD)
+        }
+        else if is_selected
+        {
+            Style::default().fg(Color::White)
+        }
+        else
+        {
+            Style::default().fg(Color::Gray)
+        };
+
+        // Wrap the command text
+        let command = &entry.command;
+        let mut first_line = true;
+
+        if !command.is_empty()
+        {
+            let mut remaining = command.as_str();
+            while !remaining.is_empty()
+            {
+                let chunk_len = remaining.len().min(cmd_width);
+                let chunk = &remaining[..chunk_len];
+                remaining = &remaining[chunk_len..];
+
+                if first_line
+                {
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("{} [{}] ", prefix, time_str)),
+                        Span::styled(format!("[{:4}] ", status), Style::default().fg(status_color)),
+                        Span::styled(chunk, style),
+                    ]));
+                    first_line = false;
+                }
+                else
+                {
+                    // Indent continuation lines
+                    let indent = " ".repeat(header_len);
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}{}", indent, chunk), style),
+                    ]));
+                }
+            }
+        }
+        else
+        {
+            // No command, just show header
+            lines.push(Line::from(vec![
+                Span::raw(format!("{} [{}] ", prefix, time_str)),
+                Span::styled(format!("[{:4}] ", status), Style::default().fg(status_color)),
+            ]));
+        }
+
+        // Show error output for failed commands
+        if !entry.success
+        {
+            if let Some(ref err) = entry.error_output
+            {
+                let indent = "     ";
+                for err_line in err.lines().take(3)
+                {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}{}", indent, err_line), Style::default().fg(Color::Red)),
+                    ]));
+                }
+            }
+        }
+    }
+
+    let total_lines = lines.len();
+
+    // Calculate scroll position based on cursor
+    // Find which line the cursor entry starts at
+    let cursor_line = if app.log_cursor < entry_start_lines.len()
+    {
+        entry_start_lines[app.log_cursor]
+    }
+    else
+    {
+        0
+    };
+
+    // Adjust log_scroll to be line-based for proper scrolling
+    // Auto-scroll: if cursor is at last entry, scroll to show bottom
+    if app.log_auto_scroll && total_lines > visible_height
+    {
+        app.log_scroll = total_lines.saturating_sub(visible_height);
+    }
+    else
+    {
+        // Keep cursor visible
+        if cursor_line < app.log_scroll
+        {
+            app.log_scroll = cursor_line;
+        }
+        else if cursor_line >= app.log_scroll + visible_height
+        {
+            app.log_scroll = cursor_line.saturating_sub(visible_height - 1);
+        }
+    }
+
+    // Use Paragraph with scroll
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .scroll((app.log_scroll as u16, 0));
+    frame.render_widget(paragraph, area);
+}
+
 /// Render the search bar
 fn render_search_bar(frame: &mut Frame,
                      app: &App,
@@ -420,7 +589,7 @@ fn render_help_overlay(frame: &mut Frame)
         Line::from(""),
         Line::from(vec![
             Span::styled("  Tab      ", Style::default().fg(Color::Cyan)),
-            Span::raw("Switch panel"),
+            Span::raw("Switch panel (Snapshots→Files→Log)"),
         ]),
         Line::from(vec![
             Span::styled("  Enter    ", Style::default().fg(Color::Cyan)),
@@ -447,6 +616,12 @@ fn render_help_overlay(frame: &mut Frame)
             Span::styled("  q / Esc  ", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Command Log:", Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from("  Shows restic commands with OK/FAIL status"),
+        Line::from("  Auto-scrolls when at bottom; scroll to review history"),
         Line::from(""),
         Line::from(vec![
             Span::styled("Search Mode:", Style::default().fg(Color::Yellow)),

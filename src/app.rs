@@ -14,6 +14,33 @@ pub enum Panel
 {
     Snapshots,
     Files,
+    CommandLog,
+}
+
+/// A single command log entry
+#[derive(Debug, Clone)]
+pub struct CommandLogEntry
+{
+    pub timestamp: chrono::DateTime<chrono::Local>,
+    pub command: String,
+    pub success: bool,
+    pub error_output: Option<String>,
+}
+
+impl CommandLogEntry
+{
+    pub fn new(command: String,
+               success: bool,
+               error_output: Option<String>)
+               -> Self
+    {
+        Self {
+            timestamp: chrono::Local::now(),
+            command,
+            success,
+            error_output,
+        }
+    }
 }
 
 /// Application state
@@ -409,6 +436,14 @@ pub struct App
     pub snapshot_visible_height: usize,
     pub file_visible_height: usize,
 
+    // Command log
+    pub command_logs: Vec<CommandLogEntry>,
+    pub log_cursor: usize,
+    pub log_scroll: usize,
+    pub log_visible_height: usize,
+    pub log_auto_scroll: bool,  // True when scroll is at bottom (auto-scroll on new entry)
+    pub log_file_path: Option<String>,
+
     pub should_quit: bool,
 }
 
@@ -443,6 +478,12 @@ impl App
             spinner_frame: 0,
             snapshot_visible_height: 20,
             file_visible_height: 20,
+            command_logs: Vec::new(),
+            log_cursor: 0,
+            log_scroll: 0,
+            log_visible_height: 5,
+            log_auto_scroll: true,
+            log_file_path: None,
             should_quit: false,
         }
     }
@@ -576,6 +617,7 @@ impl App
         {
             Panel::Snapshots => (self.snapshots.len(), self.snapshot_visible_height),
             Panel::Files => (self.visible_file_count(), self.file_visible_height),
+            Panel::CommandLog => (self.command_logs.len(), self.log_visible_height),
         };
 
         if count == 0
@@ -600,9 +642,16 @@ impl App
         {
             Panel::Snapshots => &mut self.snapshot_cursor,
             Panel::Files => &mut self.file_cursor,
+            Panel::CommandLog => &mut self.log_cursor,
         };
 
         *cursor = Self::clamp_cursor(*cursor, delta, max);
+
+        // Update auto-scroll flag for command log
+        if self.focused_panel == Panel::CommandLog
+        {
+            self.log_auto_scroll = self.log_cursor >= self.command_logs.len().saturating_sub(1);
+        }
     }
 
     /// Start file search mode
@@ -937,6 +986,10 @@ impl App
                     self.file_scroll = self.file_cursor - visible_height + 1;
                 }
             }
+            Panel::CommandLog =>
+            {
+                self.adjust_log_scroll(visible_height);
+            }
         }
     }
 
@@ -964,7 +1017,8 @@ impl App
         self.focused_panel = match self.focused_panel
         {
             Panel::Snapshots => Panel::Files,
-            Panel::Files => Panel::Snapshots,
+            Panel::Files => Panel::CommandLog,
+            Panel::CommandLog => Panel::Snapshots,
         };
     }
 
@@ -1022,6 +1076,10 @@ impl App
                         return Some(Command::NavigateDir { path });
                     }
                 }
+            }
+            Panel::CommandLog =>
+            {
+                // No action on Enter in command log panel
             }
         }
         None
@@ -1102,6 +1160,55 @@ impl App
     {
         self.status_message = Some(message);
         self.status_expires = Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+    }
+
+    /// Add a command log entry
+    pub fn add_command_log(&mut self,
+                           command: String,
+                           success: bool,
+                           error_output: Option<String>)
+    {
+        let entry = CommandLogEntry::new(command.clone(), success, error_output.clone());
+
+        // Write to log file if configured
+        if let Some(ref path) = self.log_file_path
+        {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let status = if success { "OK" } else { "FAIL" };
+                let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
+                let _ = writeln!(file, "[{}] [{}] {}", timestamp, status, command);
+                if let Some(ref err) = error_output
+                {
+                    for line in err.lines()
+                    {
+                        let _ = writeln!(file, "    {}", line);
+                    }
+                }
+            }
+        }
+
+        self.command_logs.push(entry);
+
+        // Auto-scroll to bottom if we were already at the bottom
+        if self.log_auto_scroll
+        {
+            self.log_cursor = self.command_logs.len().saturating_sub(1);
+        }
+    }
+
+    /// Update auto-scroll flag based on cursor position
+    /// Scroll calculation is done in render_command_log
+    pub fn adjust_log_scroll(&mut self,
+                             _visible_height: usize)
+    {
+        // Update auto-scroll flag: true if we're at the last entry
+        self.log_auto_scroll = self.command_logs.is_empty()
+            || self.log_cursor >= self.command_logs.len().saturating_sub(1);
     }
 
 }
