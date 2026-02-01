@@ -76,3 +76,14 @@ pub fn parent_entry(current_path: &str) -> FileNode
         size: None,
     }
 }
+
+/// Create a FileNode from a snapshot path (for displaying paths as directories)
+pub fn path_entry(path: &str) -> FileNode
+{
+    FileNode {
+        name: path.to_string(),
+        node_type: "dir".to_string(),
+        path: path.to_string(),
+        size: None,
+    }
+}

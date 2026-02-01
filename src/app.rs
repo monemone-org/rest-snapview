@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::event::{
     self, Command, Movement, is_back, is_download, is_help, is_panel_switch, is_quit, is_select,
 };
-use crate::file::{FileNode, parent_entry};
+use crate::file::{FileNode, parent_entry, path_entry};
 use crate::snapshot::Snapshot;
 
 /// Which panel is currently focused
@@ -1031,17 +1031,23 @@ impl App
             {
                 if let Some(snapshot) = self.snapshots.get(self.snapshot_cursor)
                 {
-                    let path = snapshot.primary_path().to_string();
                     self.current_snapshot_id = Some(snapshot.full_id.clone());
-                    self.current_path = path.clone();
+                    self.current_path = String::new(); // Empty = at paths root
                     self.focused_panel = Panel::Files;
                     self.file_cursor = 0;
-                    self.nav_stack.clear(); // Clear stack when switching snapshots
-                    self.state = AppState::Loading;
-                    return Some(Command::LoadSnapshot {
-                        snapshot_id: snapshot.full_id.clone(),
-                        path,
-                    });
+                    self.file_scroll = 0;
+                    self.nav_stack.clear();
+                    self.search_query.clear();
+                    self.filtered_files.clear();
+
+                    // Populate files with snapshot paths as directory entries
+                    self.files = snapshot.paths
+                        .iter()
+                        .map(|p| path_entry(p))
+                        .collect();
+
+                    self.state = AppState::Ready;
+                    return None; // No restic command needed
                 }
             }
             Panel::Files =>
@@ -1106,6 +1112,12 @@ impl App
             return None; // No command needed, we restored from cache
         }
 
+        // At paths root (current_path is empty), can't go back further
+        if self.current_path.is_empty()
+        {
+            return None;
+        }
+
         // No cache available, need to fetch
         let parent = parent_entry(&self.current_path);
         if parent.path == self.current_path
@@ -1125,15 +1137,10 @@ impl App
     pub fn set_files(&mut self,
                      files: Vec<FileNode>)
     {
-        // Add parent directory entry if not at root
-        let snapshot_root = self.snapshots
-                                .get(self.snapshot_cursor)
-                                .map(|s| s.primary_path())
-                                .unwrap_or("/");
-
         let mut display_files = files;
 
-        if self.current_path != snapshot_root && !self.current_path.is_empty()
+        // Add parent directory entry if not at paths root
+        if !self.current_path.is_empty()
         {
             display_files.insert(0, parent_entry(&self.current_path));
         }

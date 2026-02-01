@@ -17,6 +17,18 @@ Terminal UI for browsing restic snapshots.
 - restic CLI installed and in PATH
 - Repository access configured via environment variables
 
+## Building
+
+```bash
+# Debug build (faster compile, slower runtime)
+cargo build
+# Binary at: target/debug/rest-snapview
+
+# Release build (optimized)
+cargo build --release
+# Binary at: target/release/rest-snapview
+```
+
 ## Environment Variables
 
 Required:

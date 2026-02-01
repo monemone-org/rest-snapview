@@ -96,11 +96,23 @@ fn render_snapshots(frame: &mut Frame,
                let is_selected = i == app.snapshot_cursor;
                let prefix = if is_selected { ">" } else { " " };
 
-               let line = format!("{} {:8}  {}  {}",
+               // Format tags as [tag1,tag2] or empty string
+               let tags_str = if snapshot.tags.is_empty()
+               {
+                   String::new()
+               }
+               else
+               {
+                   format!("[{}]", snapshot.tags.join(","))
+               };
+
+               let line = format!("{} {:8}  {}  {:16}  {:8}  {}",
                                   prefix,
                                   snapshot.display_id(),
                                   snapshot.formatted_time(),
-                                  snapshot.primary_path());
+                                  snapshot.hostname,
+                                  snapshot.username,
+                                  tags_str);
 
                let style = if is_selected && focused
                {
@@ -178,15 +190,22 @@ fn render_files(frame: &mut Frame,
 
     let title = if app.current_path.is_empty()
     {
-        " Files ".to_string()
+        if app.current_snapshot_id.is_some()
+        {
+            format!(" Paths [{} items] ", total_count)
+        }
+        else
+        {
+            " Files ".to_string()
+        }
     }
     else if has_filter
     {
-        format!(" Files ({}) [{}/{} matches] ", app.current_path, file_count, total_count)
+        format!(" {} [{}/{} matches] ", app.current_path, file_count, total_count)
     }
     else
     {
-        format!(" Files ({}) [{} items] ", app.current_path, total_count)
+        format!(" {} [{} items] ", app.current_path, total_count)
     };
 
     let block = Block::default().title(title)

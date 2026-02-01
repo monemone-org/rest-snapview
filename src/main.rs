@@ -207,20 +207,6 @@ fn spawn_command(client: &ResticClient,
 {
     match cmd
     {
-        Command::LoadSnapshot { snapshot_id, path } =>
-        {
-            let client = client.clone();
-            tokio::spawn(async move {
-                let cmd_result = client.list_files(&snapshot_id, &path).await;
-                let task_result = TaskResult::Files {
-                    command: cmd_result.command,
-                    result: cmd_result.result
-                        .map_err(|e| format!("Failed to list files: {}", e)),
-                    error_output: cmd_result.error_output,
-                };
-                let _ = tx.send(task_result).await;
-            });
-        }
         Command::NavigateDir { path } =>
         {
             if let Some(ref snapshot_id) = app.current_snapshot_id

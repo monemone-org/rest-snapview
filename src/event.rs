@@ -4,12 +4,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 #[derive(Debug, Clone)]
 pub enum Command
 {
-    /// Load files for the selected snapshot
-    LoadSnapshot
-    {
-        snapshot_id: String,
-        path: String,
-    },
     /// Navigate into a directory
     NavigateDir
     {
