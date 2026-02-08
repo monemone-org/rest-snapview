@@ -46,7 +46,13 @@ Optional:
 ```bash
 export RESTIC_REPOSITORY="rest:https://your-server/repo"
 export RESTIC_PASSWORD_FILE="$HOME/.restic-password"
+
+# Run via cargo
 cargo run
+
+# Or run the compiled binary directly
+target/debug/rest-snapview
+target/release/rest-snapview
 ```
 
 ## Keyboard Controls
