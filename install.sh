@@ -4,7 +4,4 @@
 cargo build --release
 
 # Copy it somewhere on your PATH
-cp target/release/rest-snapview ~/scripts/
-
-
-
+sudo cp target/release/rest-snapview /usr/local/bin/
