@@ -9,7 +9,6 @@ Terminal UI for browsing restic snapshots.
 - Search/filter files by name with `/`
 - Download files/folders with directory picker
 - Tab completion for paths
-- Remembers last download directory
 
 ## Requirements
 
