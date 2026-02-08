@@ -31,9 +31,15 @@ cargo build --release
 
 ## Environment Variables
 
+rest-snapview has no configuration of its own. It relies entirely on the same environment variables that restic uses — if your `restic snapshots` command works, rest-snapview will too.
+
 Required:
 - `RESTIC_REPOSITORY` - Repository location
 - `RESTIC_PASSWORD` or `RESTIC_PASSWORD_FILE` or `RESTIC_PASSWORD_COMMAND` - Repository password
+
+Optional:
+- `RESTIC_REST_USERNAME`
+- `RESTIC_REST_PASSWORD`
 
 ## Usage
 
